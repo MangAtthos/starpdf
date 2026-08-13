@@ -1,73 +1,765 @@
-// api/proxy.js
-// Serverless function (Vercel) yang jadi perantara antara StarPDF (browser)
-// dan api.kyzzz.xyz. Karena request ini jalan di server, bukan di browser,
-// CORS tidak berlaku, dan API key aman tersimpan sebagai environment
-// variable (tidak pernah dikirim ke browser pengguna).
-
-export const config = {
-  api: {
-    bodyParser: false, // penting: kita teruskan body multipart apa adanya
-  },
-};
-
-const ENDPOINTS = {
-  remini: "https://api.kyzzz.xyz/api/tools/remini",
-  removebg: "https://api.kyzzz.xyz/api/tools/removebg",
-};
-
-export default async function handler(req, res) {
-  // Izinkan dipanggil dari domain manapun tempat StarPDF di-hosting
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StarPDF — Alat PDF & Foto Instan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root{
+    --accent:#00A8E8;
+    --accent-dark:#0087bd;
+    --accent-soft:rgba(0,168,232,0.12);
+    --glass-bg:rgba(255,255,255,0.35);
+    --glass-border:rgba(255,255,255,0.6);
+    --text-dark:#0b2733;
+    --text-mid:#3c5a66;
+    --radius-lg:22px;
+    --radius-md:14px;
+    --shadow-soft:0 8px 32px rgba(9,73,102,0.12);
   }
 
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
+  *{box-sizing:border-box;margin:0;padding:0;}
+
+  html,body{height:100%;}
+
+  body{
+    font-family:'Inter',sans-serif;
+    color:var(--text-dark);
+    background:linear-gradient(160deg,#E0F7FA 0%,#FFFFFF 55%,#eafcff 100%);
+    background-attachment:fixed;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
   }
 
-  const tool = req.query.tool;
-  const target = ENDPOINTS[tool];
-  if (!target) {
-    res.status(400).json({ error: "Parameter 'tool' tidak valid. Gunakan 'remini' atau 'removebg'." });
-    return;
+  h1,h2,h3,.logo{font-family:'Poppins',sans-serif;}
+
+  /* ---------- Glass helper ---------- */
+  .glass{
+    background:var(--glass-bg);
+    backdrop-filter:blur(15px);
+    -webkit-backdrop-filter:blur(15px);
+    border:1px solid var(--glass-border);
+    box-shadow:var(--shadow-soft);
+    border-radius:var(--radius-lg);
   }
 
-  const apiKey = process.env.KYZZ_API_KEY;
-  if (!apiKey) {
-    res.status(500).json({ error: "KYZZ_API_KEY belum diatur di environment variable server." });
-    return;
+  /* ---------- Navbar ---------- */
+  .navbar{
+    position:sticky;top:0;z-index:100;
+    display:flex;align-items:center;justify-content:center;
+    gap:16px;
+    padding:14px 28px;
+    margin:16px;
+    border-radius:var(--radius-lg);
+  }
+  .logo{
+    display:flex;align-items:center;gap:8px;
+    font-size:1.4rem;font-weight:800;color:var(--accent);
+    cursor:pointer;user-select:none;letter-spacing:-0.5px;
+    transition:transform .2s ease;
+  }
+  .logo:hover{transform:translateY(-1px);}
+  .logo .star{font-size:1.3rem;filter:drop-shadow(0 2px 6px rgba(0,168,232,.5));}
+
+
+  /* ---------- Layout ---------- */
+  main{flex:1;padding:8px 16px 60px;max-width:1100px;margin:0 auto;width:100%;}
+  .view{display:none;animation:fadeIn .35s ease;}
+  .view.active{display:block;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+  .hero{text-align:center;margin:34px 0 40px;}
+  .hero h1{font-size:2.3rem;font-weight:800;color:var(--text-dark);}
+  .hero h1 span{color:var(--accent);}
+  .hero p{margin-top:10px;color:var(--text-mid);font-size:1.02rem;}
+
+  /* ---------- Tool grid (iLovePDF-esque) ---------- */
+  .tools-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:22px;
+  }
+  .tool-card{
+    padding:28px 22px;
+    cursor:pointer;
+    text-align:left;
+    display:flex;flex-direction:column;gap:14px;
+    transition:transform .25s ease, box-shadow .25s ease, background .25s ease;
+    position:relative;
+    overflow:hidden;
+  }
+  .tool-card::after{
+    content:"";position:absolute;inset:0;
+    background:linear-gradient(135deg,rgba(0,168,232,0) 40%,rgba(0,168,232,.10));
+    opacity:0;transition:opacity .25s ease;
+  }
+  .tool-card:hover{transform:translateY(-6px);box-shadow:0 16px 40px rgba(9,73,102,0.18);}
+  .tool-card:hover::after{opacity:1;}
+  .tool-icon{
+    width:52px;height:52px;border-radius:16px;
+    background:var(--accent-soft);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--accent-dark);
+  }
+  .tool-card h3{font-size:1.1rem;color:var(--text-dark);}
+  .tool-card p{font-size:.87rem;color:var(--text-mid);line-height:1.4;}
+  .tool-tag{
+    align-self:flex-start;font-size:.68rem;font-weight:600;
+    color:var(--accent-dark);background:var(--accent-soft);
+    padding:3px 10px;border-radius:999px;letter-spacing:.3px;
   }
 
-  try {
-    // Kumpulkan raw body (multipart/form-data) apa adanya, lalu teruskan
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
+  /* ---------- Tool view header ---------- */
+  .tool-header{display:flex;align-items:center;gap:14px;margin:26px 0 26px;}
+  .back-btn{
+    width:42px;height:42px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.8);
+    cursor:pointer;color:var(--accent-dark);transition:background .2s ease, transform .2s ease;
+    flex-shrink:0;
+  }
+  .back-btn:hover{background:#fff;transform:translateX(-2px);}
+  .tool-header h2{font-size:1.5rem;color:var(--text-dark);}
+  .tool-header p{color:var(--text-mid);font-size:.9rem;margin-top:2px;}
 
-    const upstream = await fetch(target, {
-      method: "POST",
-      headers: {
-        "content-type": req.headers["content-type"] || "",
-        "apikey": apiKey,
-        "x-api-key": apiKey,
-        "Authorization": apiKey,
-      },
-      body,
+  /* ---------- Panels ---------- */
+  .panel{padding:26px;margin-bottom:22px;}
+
+  .dropzone{
+    border:2px dashed rgba(0,168,232,0.45);
+    border-radius:var(--radius-md);
+    padding:38px 20px;
+    text-align:center;
+    cursor:pointer;
+    transition:background .2s ease, border-color .2s ease;
+    color:var(--text-mid);
+  }
+  .dropzone:hover, .dropzone.drag-over{background:rgba(0,168,232,0.08);border-color:var(--accent);}
+  .dropzone svg{color:var(--accent);margin-bottom:10px;}
+  .dropzone strong{color:var(--accent-dark);}
+  .dropzone small{display:block;margin-top:6px;color:#7d97a2;}
+  input[type="file"]{display:none;}
+
+  /* Buttons */
+  .btn{
+    font-family:'Inter',sans-serif;
+    font-weight:600;font-size:.92rem;
+    border:none;cursor:pointer;
+    border-radius:999px;
+    padding:12px 26px;
+    display:inline-flex;align-items:center;gap:8px;
+    transition:transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+  }
+  .btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent-dark));color:#fff;box-shadow:0 8px 20px rgba(0,168,232,.35);}
+  .btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 12px 26px rgba(0,168,232,.45);}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed;box-shadow:none;}
+  .btn-ghost{background:rgba(255,255,255,.6);color:var(--text-dark);border:1px solid rgba(255,255,255,.8);}
+  .btn-ghost:hover{background:#fff;}
+  .btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px;align-items:center;}
+
+  /* Photo grid */
+  .photo-grid{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+    gap:14px;margin-top:22px;
+  }
+  .photo-item{
+    position:relative;border-radius:var(--radius-md);overflow:hidden;
+    aspect-ratio:3/4;background:#f1fbfd;border:1px solid rgba(255,255,255,.7);
+    box-shadow:0 4px 14px rgba(9,73,102,.1);
+    cursor:grab;
+  }
+  .photo-item.dragging{opacity:.4;}
+  .photo-item img{width:100%;height:100%;object-fit:cover;display:block;}
+  .photo-order{
+    position:absolute;top:6px;left:6px;
+    background:var(--accent);color:#fff;font-size:.7rem;font-weight:700;
+    width:22px;height:22px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.25);
+  }
+  .photo-actions{
+    position:absolute;bottom:0;left:0;right:0;
+    display:flex;justify-content:space-between;
+    padding:6px;background:linear-gradient(to top,rgba(0,0,0,.55),transparent);
+  }
+  .photo-actions button{
+    background:rgba(255,255,255,.9);border:none;border-radius:50%;
+    width:26px;height:26px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    color:var(--text-dark);font-size:.8rem;transition:background .15s ease;
+  }
+  .photo-actions button:hover{background:#fff;color:var(--accent-dark);}
+  .photo-actions .remove-btn{color:#e0455f;}
+
+  /* Single-image tools */
+  .preview-single{
+    margin-top:20px;border-radius:var(--radius-md);overflow:hidden;
+    border:1px solid rgba(255,255,255,.7);background:#f1fbfd;
+    max-width:340px;
+  }
+  .preview-single img{width:100%;display:block;}
+
+  .result-row{
+    display:flex;gap:24px;flex-wrap:wrap;margin-top:24px;
+  }
+  .result-box{flex:1;min-width:240px;}
+  .result-box h4{font-size:.85rem;color:var(--text-mid);margin-bottom:10px;font-weight:600;}
+  .result-box .img-wrap{
+    border-radius:var(--radius-md);overflow:hidden;border:1px solid rgba(255,255,255,.7);
+    background:
+      linear-gradient(45deg,#f0f0f0 25%,transparent 25%),
+      linear-gradient(-45deg,#f0f0f0 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#f0f0f0 75%),
+      linear-gradient(-45deg,transparent 75%,#f0f0f0 75%);
+    background-size:20px 20px;
+    background-position:0 0,0 10px,10px -10px,-10px 0px;
+  }
+  .result-box img{width:100%;display:block;}
+
+  /* status / loading */
+  .status-box{
+    display:none;align-items:center;gap:12px;
+    margin-top:20px;padding:14px 18px;
+    border-radius:var(--radius-md);
+    background:rgba(0,168,232,.08);
+    color:var(--accent-dark);font-size:.9rem;font-weight:500;
+  }
+  .status-box.active{display:flex;}
+  .status-box.error{background:rgba(224,69,95,.1);color:#c22e46;}
+  .spinner{
+    width:18px;height:18px;border-radius:50%;
+    border:3px solid rgba(0,168,232,.25);border-top-color:var(--accent);
+    animation:spin .8s linear infinite;flex-shrink:0;
+  }
+  .status-box.error .spinner{display:none;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .file-name-chip{
+    display:inline-flex;align-items:center;gap:8px;
+    margin-top:14px;padding:8px 14px;border-radius:999px;
+    background:rgba(0,168,232,.1);color:var(--accent-dark);
+    font-size:.83rem;font-weight:500;
+  }
+
+  footer{
+    text-align:center;padding:18px;color:#7d97a2;font-size:.8rem;
+  }
+
+  @media (max-width:640px){
+    .navbar{padding:14px 16px;}
+    .hero h1{font-size:1.7rem;}
+  }
+</style>
+</head>
+<body>
+
+<nav class="navbar glass">
+  <div class="logo" id="logoHome">
+    <span class="star">⭐</span>StarPDF
+  </div>
+</nav>
+
+<main>
+
+  <!-- HOME VIEW -->
+  <section id="home-view" class="view active">
+    <div class="hero">
+      <h1>Semua alat foto & PDF kamu, <span>dalam satu tempat</span></h1>
+      <p>Pilih alat di bawah ini untuk mulai mengonversi, menjernihkan, atau membersihkan gambar.</p>
+    </div>
+    <div class="tools-grid">
+      <div class="tool-card glass" data-tool="photo-to-pdf">
+        <div class="tool-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg>
+        </div>
+        <span class="tool-tag">Client-side</span>
+        <h3>Foto ke PDF</h3>
+        <p>Upload beberapa foto sekaligus, atur ulang urutannya, lalu gabungkan jadi satu file PDF.</p>
+      </div>
+
+      <div class="tool-card glass" data-tool="enhancer">
+        <div class="tool-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
+        </div>
+        <span class="tool-tag">AI Enhancer</span>
+        <h3>Penjernih Foto</h3>
+        <p>Tingkatkan ketajaman dan kualitas foto buram menggunakan AI dalam sekali klik.</p>
+      </div>
+
+      <div class="tool-card glass" data-tool="bg-remover">
+        <div class="tool-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 21V3M16 3v18" stroke-dasharray="3 3"/></svg>
+        </div>
+        <span class="tool-tag">AI Remover</span>
+        <h3>Hapus Background</h3>
+        <p>Hilangkan latar belakang foto secara otomatis dan dapatkan hasil PNG transparan.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- PHOTO TO PDF VIEW -->
+  <section id="photo-to-pdf-view" class="view">
+    <div class="tool-header">
+      <div class="back-btn" data-back>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+      </div>
+      <div>
+        <h2>Foto ke PDF</h2>
+        <p>Upload foto, atur urutannya, lalu unduh sebagai satu file PDF.</p>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="dropzone" id="photoDropzone">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        <div><strong>Klik untuk upload</strong> atau seret & lepas foto di sini</div>
+        <small>Bisa pilih banyak foto sekaligus (JPG, PNG)</small>
+      </div>
+      <input type="file" id="photoInput" accept="image/*" multiple>
+
+      <div id="photoGrid" class="photo-grid"></div>
+
+      <div class="btn-row" id="photoBtnRow" style="display:none;">
+        <button class="btn btn-primary" id="convertBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Convert & Download PDF
+        </button>
+        <button class="btn btn-ghost" id="clearPhotosBtn">Hapus Semua</button>
+      </div>
+      <div class="status-box" id="pdfStatus"><div class="spinner"></div><span></span></div>
+    </div>
+  </section>
+
+  <!-- ENHANCER VIEW -->
+  <section id="enhancer-view" class="view">
+    <div class="tool-header">
+      <div class="back-btn" data-back>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+      </div>
+      <div>
+        <h2>Penjernih Foto (AI Enhancer)</h2>
+        <p>Upload satu foto untuk dipertajam kualitasnya dengan AI.</p>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="dropzone" id="enhancerDropzone">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        <div><strong>Klik untuk upload</strong> atau seret & lepas foto di sini</div>
+        <small>Satu gambar (JPG, PNG)</small>
+      </div>
+      <input type="file" id="enhancerInput" accept="image/*">
+      <div id="enhancerFileChip"></div>
+
+      <div class="btn-row" id="enhancerBtnRow" style="display:none;">
+        <button class="btn btn-primary" id="enhancerProcessBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>
+          Jernihkan Foto
+        </button>
+        <button class="btn btn-ghost" id="enhancerResetBtn">Ganti Foto</button>
+      </div>
+      <div class="status-box" id="enhancerStatus"><div class="spinner"></div><span></span></div>
+
+      <div class="result-row" id="enhancerResultRow" style="display:none;">
+        <div class="result-box">
+          <h4>Sebelum</h4>
+          <div class="img-wrap"><img id="enhancerBeforeImg" alt="Sebelum"></div>
+        </div>
+        <div class="result-box">
+          <h4>Sesudah</h4>
+          <div class="img-wrap"><img id="enhancerAfterImg" alt="Sesudah"></div>
+          <div class="btn-row">
+            <a class="btn btn-primary" id="enhancerDownloadBtn" download="starpdf-enhanced.png">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+              Download Hasil
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BG REMOVER VIEW -->
+  <section id="bg-remover-view" class="view">
+    <div class="tool-header">
+      <div class="back-btn" data-back>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+      </div>
+      <div>
+        <h2>Hapus Background</h2>
+        <p>Upload satu foto untuk dihapus latar belakangnya secara otomatis.</p>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="dropzone" id="bgDropzone">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        <div><strong>Klik untuk upload</strong> atau seret & lepas foto di sini</div>
+        <small>Satu gambar (JPG, PNG)</small>
+      </div>
+      <input type="file" id="bgInput" accept="image/*">
+      <div id="bgFileChip"></div>
+
+      <div class="btn-row" id="bgBtnRow" style="display:none;">
+        <button class="btn btn-primary" id="bgProcessBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>
+          Hapus Background
+        </button>
+        <button class="btn btn-ghost" id="bgResetBtn">Ganti Foto</button>
+      </div>
+      <div class="status-box" id="bgStatus"><div class="spinner"></div><span></span></div>
+
+      <div class="result-row" id="bgResultRow" style="display:none;">
+        <div class="result-box">
+          <h4>Sebelum</h4>
+          <div class="img-wrap"><img id="bgBeforeImg" alt="Sebelum"></div>
+        </div>
+        <div class="result-box">
+          <h4>Sesudah (PNG Transparan)</h4>
+          <div class="img-wrap"><img id="bgAfterImg" alt="Sesudah"></div>
+          <div class="btn-row">
+            <a class="btn btn-primary" id="bgDownloadBtn" download="starpdf-nobg.png">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+              Download Hasil
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>StarPDF — dibuat untuk mempercepat kerja foto & PDF harianmu.</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ================= API KEY =================
+     API key TIDAK lagi disimpan di sini. Semua request dikirim ke
+     /api/proxy (serverless function), yang menyimpan key sebagai
+     environment variable di server dan meneruskan request ke
+     api.kyzzz.xyz dari sisi server (menghindari CORS & menyembunyikan
+     key dari browser pengguna). Lihat file api/proxy.js. */
+
+  /* ================= VIEW ROUTING ================= */
+  const views = document.querySelectorAll(".view");
+  function showView(id){
+    views.forEach(v => v.classList.toggle("active", v.id === id));
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+  document.getElementById("logoHome").addEventListener("click", () => showView("home-view"));
+  document.querySelectorAll(".tool-card").forEach(card => {
+    card.addEventListener("click", () => showView(card.dataset.tool + "-view"));
+  });
+  document.querySelectorAll("[data-back]").forEach(btn => {
+    btn.addEventListener("click", () => showView("home-view"));
+  });
+
+  /* ================= STATUS BOX HELPER ================= */
+  function setStatus(box, mode, message){
+    // mode: 'loading' | 'error' | 'off'
+    box.classList.remove("active","error");
+    const span = box.querySelector("span");
+    if(mode === "off"){ return; }
+    box.classList.add("active");
+    if(mode === "error") box.classList.add("error");
+    span.textContent = message;
+  }
+
+  /* =========================================================
+     ALAT 1 — FOTO KE PDF
+  ========================================================= */
+  (function initPhotoToPdf(){
+    const dropzone = document.getElementById("photoDropzone");
+    const input = document.getElementById("photoInput");
+    const grid = document.getElementById("photoGrid");
+    const btnRow = document.getElementById("photoBtnRow");
+    const convertBtn = document.getElementById("convertBtn");
+    const clearBtn = document.getElementById("clearPhotosBtn");
+    const statusBox = document.getElementById("pdfStatus");
+
+    let photos = []; // {id, file, url}
+    let dragSrcId = null;
+
+    dropzone.addEventListener("click", () => input.click());
+    dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropzone.classList.remove("drag-over");
+      handleFiles(e.dataTransfer.files);
+    });
+    input.addEventListener("change", () => { handleFiles(input.files); input.value = ""; });
+
+    function handleFiles(fileList){
+      const files = Array.from(fileList).filter(f => f.type.startsWith("image/"));
+      files.forEach(file => {
+        photos.push({ id: Date.now() + Math.random().toString(36).slice(2), file, url: URL.createObjectURL(file) });
+      });
+      renderGrid();
+    }
+
+    function renderGrid(){
+      grid.innerHTML = "";
+      photos.forEach((p, idx) => {
+        const item = document.createElement("div");
+        item.className = "photo-item";
+        item.draggable = true;
+        item.dataset.id = p.id;
+
+        item.innerHTML = `
+          <div class="photo-order">${idx + 1}</div>
+          <img src="${p.url}" alt="Foto ${idx + 1}">
+          <div class="photo-actions">
+            <button class="move-left-btn" title="Geser ke kiri" ${idx === 0 ? "disabled style='opacity:.3;cursor:default;'" : ""}>&#8592;</button>
+            <button class="remove-btn" title="Hapus foto">&times;</button>
+            <button class="move-right-btn" title="Geser ke kanan" ${idx === photos.length - 1 ? "disabled style='opacity:.3;cursor:default;'" : ""}>&#8594;</button>
+          </div>
+        `;
+
+        item.querySelector(".remove-btn").addEventListener("click", () => {
+          photos = photos.filter(x => x.id !== p.id);
+          renderGrid();
+        });
+        item.querySelector(".move-left-btn").addEventListener("click", () => {
+          if(idx > 0){ [photos[idx-1], photos[idx]] = [photos[idx], photos[idx-1]]; renderGrid(); }
+        });
+        item.querySelector(".move-right-btn").addEventListener("click", () => {
+          if(idx < photos.length - 1){ [photos[idx+1], photos[idx]] = [photos[idx], photos[idx+1]]; renderGrid(); }
+        });
+
+        // Drag & drop reorder
+        item.addEventListener("dragstart", () => { dragSrcId = p.id; item.classList.add("dragging"); });
+        item.addEventListener("dragend", () => { item.classList.remove("dragging"); });
+        item.addEventListener("dragover", e => e.preventDefault());
+        item.addEventListener("drop", e => {
+          e.preventDefault();
+          if(dragSrcId === null || dragSrcId === p.id) return;
+          const fromIdx = photos.findIndex(x => x.id === dragSrcId);
+          const toIdx = photos.findIndex(x => x.id === p.id);
+          const [moved] = photos.splice(fromIdx, 1);
+          photos.splice(toIdx, 0, moved);
+          dragSrcId = null;
+          renderGrid();
+        });
+
+        grid.appendChild(item);
+      });
+
+      btnRow.style.display = photos.length ? "flex" : "none";
+      setStatus(statusBox, "off");
+    }
+
+    clearBtn.addEventListener("click", () => { photos = []; renderGrid(); });
+
+    convertBtn.addEventListener("click", async () => {
+      if(!photos.length) return;
+      convertBtn.disabled = true;
+      setStatus(statusBox, "loading", "Menyusun foto menjadi PDF...");
+
+      try{
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({ unit: "pt" });
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+
+        for(let i = 0; i < photos.length; i++){
+          const dataUrl = await fileToDataUrl(photos[i].file);
+          const dims = await getImageDimensions(dataUrl);
+          const margin = 24;
+          const maxW = pageW - margin * 2;
+          const maxH = pageH - margin * 2;
+          let w = dims.w, h = dims.h;
+          const scale = Math.min(maxW / w, maxH / h);
+          w *= scale; h *= scale;
+          const x = (pageW - w) / 2;
+          const y = (pageH - h) / 2;
+
+          if(i > 0) pdf.addPage();
+          const format = photos[i].file.type.includes("png") ? "PNG" : "JPEG";
+          pdf.addImage(dataUrl, format, x, y, w, h, undefined, "FAST");
+        }
+
+        pdf.save("StarPDF-" + Date.now() + ".pdf");
+        setStatus(statusBox, "loading", "Berhasil! File PDF sedang diunduh.");
+        setTimeout(() => setStatus(statusBox, "off"), 2500);
+      }catch(err){
+        console.error(err);
+        setStatus(statusBox, "error", "Gagal membuat PDF: " + err.message);
+      }finally{
+        convertBtn.disabled = false;
+      }
     });
 
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const resultBuffer = Buffer.from(await upstream.arrayBuffer());
+    function fileToDataUrl(file){
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+    function getImageDimensions(dataUrl){
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+    }
+  })();
 
-    res.status(upstream.status);
-    res.setHeader("content-type", contentType);
-    res.send(resultBuffer);
-  } catch (err) {
-    res.status(502).json({ error: "Gagal menghubungi API Kyzz: " + err.message });
+  /* =========================================================
+     Shared helper — generic single-image AI tool
+  ========================================================= */
+  function initSingleImageTool(config){
+    const dropzone = document.getElementById(config.dropzoneId);
+    const input = document.getElementById(config.inputId);
+    const fileChip = document.getElementById(config.chipId);
+    const btnRow = document.getElementById(config.btnRowId);
+    const processBtn = document.getElementById(config.processBtnId);
+    const resetBtn = document.getElementById(config.resetBtnId);
+    const statusBox = document.getElementById(config.statusId);
+    const resultRow = document.getElementById(config.resultRowId);
+    const beforeImg = document.getElementById(config.beforeImgId);
+    const afterImg = document.getElementById(config.afterImgId);
+    const downloadBtn = document.getElementById(config.downloadBtnId);
+
+    let currentFile = null;
+
+    dropzone.addEventListener("click", () => input.click());
+    dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropzone.classList.remove("drag-over");
+      if(e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+    input.addEventListener("change", () => {
+      if(input.files.length) setFile(input.files[0]);
+      input.value = "";
+    });
+
+    function setFile(file){
+      if(!file.type.startsWith("image/")) return;
+      currentFile = file;
+      fileChip.innerHTML = `<div class="file-name-chip">📎 ${escapeHtml(file.name)}</div>`;
+      btnRow.style.display = "flex";
+      resultRow.style.display = "none";
+      setStatus(statusBox, "off");
+    }
+
+    resetBtn.addEventListener("click", () => {
+      currentFile = null;
+      fileChip.innerHTML = "";
+      btnRow.style.display = "none";
+      resultRow.style.display = "none";
+      setStatus(statusBox, "off");
+    });
+
+    processBtn.addEventListener("click", async () => {
+      if(!currentFile) return;
+
+      processBtn.disabled = true;
+      setStatus(statusBox, "loading", config.loadingMessage);
+
+      try{
+        const formData = new FormData();
+        formData.append("image", currentFile);
+        formData.append("file", currentFile);
+
+        // Panggil proxy sendiri (/api/proxy), BUKAN api.kyzzz.xyz langsung.
+        // Proxy yang menambahkan API key & meneruskan ke Kyzz dari sisi
+        // server, sehingga tidak kena CORS dan key tidak terlihat di browser.
+        const response = await fetch(config.endpoint, {
+          method: "POST",
+          body: formData
+        });
+
+        if(!response.ok){
+          let msg = "Server merespons dengan status " + response.status;
+          try{
+            const errJson = await response.json();
+            if(errJson && (errJson.message || errJson.error)) msg = errJson.message || errJson.error;
+          }catch(_){}
+          throw new Error(msg);
+        }
+
+        const contentType = response.headers.get("content-type") || "";
+        let resultUrl;
+
+        if(contentType.includes("application/json")){
+          const json = await response.json();
+          const resultLink = json.result || json.url || json.data?.url || json.output || json.image;
+          if(!resultLink) throw new Error("Respons API tidak berisi tautan/gambar hasil.");
+          resultUrl = resultLink;
+        }else{
+          const blob = await response.blob();
+          resultUrl = URL.createObjectURL(blob);
+        }
+
+        beforeImg.src = URL.createObjectURL(currentFile);
+        afterImg.src = resultUrl;
+        downloadBtn.href = resultUrl;
+        resultRow.style.display = "flex";
+        setStatus(statusBox, "off");
+      }catch(err){
+        console.error(err);
+        setStatus(statusBox, "error", "Gagal memproses gambar: " + err.message);
+      }finally{
+        processBtn.disabled = false;
+      }
+    });
+
+    function escapeHtml(str){
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
   }
-}
+
+  /* ALAT 2 — AI Enhancer */
+  initSingleImageTool({
+    dropzoneId: "enhancerDropzone",
+    inputId: "enhancerInput",
+    chipId: "enhancerFileChip",
+    btnRowId: "enhancerBtnRow",
+    processBtnId: "enhancerProcessBtn",
+    resetBtnId: "enhancerResetBtn",
+    statusId: "enhancerStatus",
+    resultRowId: "enhancerResultRow",
+    beforeImgId: "enhancerBeforeImg",
+    afterImgId: "enhancerAfterImg",
+    downloadBtnId: "enhancerDownloadBtn",
+    endpoint: "/api/proxy?tool=remini",
+    loadingMessage: "Menjernihkan foto dengan AI, mohon tunggu..."
+  });
+
+  /* ALAT 3 — BG Remover */
+  initSingleImageTool({
+    dropzoneId: "bgDropzone",
+    inputId: "bgInput",
+    chipId: "bgFileChip",
+    btnRowId: "bgBtnRow",
+    processBtnId: "bgProcessBtn",
+    resetBtnId: "bgResetBtn",
+    statusId: "bgStatus",
+    resultRowId: "bgResultRow",
+    beforeImgId: "bgBeforeImg",
+    afterImgId: "bgAfterImg",
+    downloadBtnId: "bgDownloadBtn",
+    endpoint: "/api/proxy?tool=removebg",
+    loadingMessage: "Menghapus background dengan AI, mohon tunggu..."
+  });
+
+})();
+</script>
+</body>
+</html>
